@@ -1,0 +1,27 @@
+# METR-LA experiment configuration
+device: "cuda:0"
+data: "data/METR-LA"
+adjdata: "data/sensor_graph/adj_mx.pkl"
+adjtype: "doubletransition"   # forward + backward transition matrices
+
+# Model
+gcn_bool: true
+addaptadj: true
+randomadj: true
+aptonly: false
+seq_length: 12
+nhid: 32
+in_dim: 2
+num_nodes: 207
+
+# Training
+batch_size: 64
+learning_rate: 0.001
+dropout: 0.3
+weight_decay: 0.0001
+epochs: 100
+print_every: 50
+
+# Checkpointing
+save: "garage/metr"
+expid: 1
