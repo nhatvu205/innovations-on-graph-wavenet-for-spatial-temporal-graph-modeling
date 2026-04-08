@@ -71,14 +71,17 @@ adj_mx.pkl  adj_mx_bay.pkl
 
 ---
 
-## 3. Early Stopping và lưu checkpoint
+## 3. Early Stopping, lưu checkpoint và resume
 
-Từ phiên bản cải tiến này, `train.py` thay đổi hai hành vi quan trọng so với baseline:
+### Hành vi lưu checkpoint
 
 | Hành vi | Baseline cũ | Phiên bản mới |
 |---|---|---|
-| Lưu checkpoint | Sau **mỗi** epoch | Chỉ khi có **val loss mới thấp hơn** |
+| Lưu checkpoint | 1 file mới sau **mỗi** epoch | Ghi đè **1 file duy nhất** `_best.pth` khi có val loss mới thấp hơn |
+| Nội dung lưu | Model weights | Model weights + Optimizer state + Epoch + Patience counter + Val loss history |
 | Dừng huấn luyện | Luôn chạy hết `--epochs` | Dừng sớm nếu không cải thiện `--early_stopping_patience` epoch liên tiếp |
+
+Sau khi train xong, `train.py` còn lưu thêm 1 file model-only `_exp{id}_best_{val}.pth` — đây là file dùng với `test.py`.
 
 **Tham số điều chỉnh:**
 
@@ -87,13 +90,38 @@ Từ phiên bản cải tiến này, `train.py` thay đổi hai hành vi quan tr
 
 **Log mẫu khi chạy:**
 ```
-Epoch: 042, ..., Valid Loss: 3.0421, ...  [NEW BEST]
+Epoch: 042, ..., Valid Loss: 3.0421, ...  [NEW BEST — saved]
 Epoch: 043, ..., Valid Loss: 3.0498, ...  (no improvement 1/10)
 ...
 Epoch: 052, ..., Valid Loss: 3.0711, ...  (no improvement 10/10)
 Early stopping triggered at epoch 52. No improvement in val loss for 10 consecutive epochs.
 Training finished. Best validation loss: 3.0421 (epoch 42)
 ```
+
+### Resume từ checkpoint
+
+Dùng `--resume` để tiếp tục training từ epoch đã dừng, khôi phục đầy đủ trạng thái (model, optimizer, patience counter):
+
+```bash
+!python train.py \
+  --device cuda:0 \
+  --data data/METR-LA \
+  --adjdata data/sensor_graph/adj_mx.pkl \
+  --adjtype doubletransition \
+  --gcn_bool --addaptadj --randomadj \
+  --num_nodes 207 \
+  --model_variant spatiotemporal \
+  --temporal_attention_heads 4 \
+  --seed 42 \
+  --epochs 100 \
+  --early_stopping_patience 10 \
+  --save garage/metr_st \
+  --expid 1 \
+  --metrics_out garage/metrics/metr_st_seed42.json \
+  --resume garage/metr_st_best.pth
+```
+
+> File `_best.pth` là checkpoint đầy đủ được tạo trong lúc train. Nếu session Colab bị ngắt, hãy backup file này lên Drive trước (xem mục 9), sau đó dùng `--resume` khi chạy lại.
 
 ---
 
@@ -270,7 +298,9 @@ Output mẫu:
 | Muốn chạy nhanh thử | Thêm `--epochs 10` để kiểm tra pipeline trước |
 | Muốn disable causal mask trong temporal attention | Thêm cờ `--no_temporal_causal_mask` |
 
-**Sao lưu checkpoint và metrics lên Drive sau khi train:**
+**Sao lưu checkpoint và metrics lên Drive:**
+
+Sau mỗi lần train (hoặc khi muốn giữ tiến độ để resume sau), chạy cell sau:
 
 ```bash
 DRIVE_ROOT="/content/drive/MyDrive/graph-wavenet"
@@ -278,11 +308,21 @@ DRIVE_ROOT="/content/drive/MyDrive/graph-wavenet"
 # Tạo thư mục backup trên Drive nếu chưa có
 !mkdir -p "$DRIVE_ROOT/garage-st-attention/metrics"
 
-# Copy toàn bộ checkpoint và metrics JSON
-!cp garage/*.pth "$DRIVE_ROOT/garage-st-attention/" 2>/dev/null || true
+# File _best.pth là checkpoint đầy đủ để resume (model + optimizer + trạng thái)
+# File _exp*_best_*.pth là model-only dùng với test.py
+!cp garage/*_best.pth "$DRIVE_ROOT/garage-st-attention/" 2>/dev/null || true
 !cp garage/metrics/*.json "$DRIVE_ROOT/garage-st-attention/metrics/" 2>/dev/null || true
 echo "Backup done."
 ```
+
+Để resume sau khi session reset, restore checkpoint về local trước:
+
+```bash
+DRIVE_ROOT="/content/drive/MyDrive/graph-wavenet"
+!cp "$DRIVE_ROOT/garage-st-attention/metr_st_best.pth" garage/metr_st_best.pth
+```
+
+Rồi thêm `--resume garage/metr_st_best.pth` vào lệnh train.
 
 ---
 
@@ -300,3 +340,4 @@ echo "Backup done."
 | `--eval_horizons` | `3,6,12` | Các horizon hiển thị trong summary |
 | `--metrics_out` | _(không lưu)_ | Đường dẫn file JSON lưu kết quả |
 | `--early_stopping_patience` | 10 | Dừng sớm nếu val loss không cải thiện sau N epoch (0 = tắt) |
+| `--resume` | _(không set)_ | Đường dẫn tới `_best.pth` để tiếp tục training từ epoch đã dừng |

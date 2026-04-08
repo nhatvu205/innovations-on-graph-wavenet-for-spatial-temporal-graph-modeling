@@ -51,6 +51,12 @@ parser.add_argument(
     default=10,
     help="Stop training if val loss does not improve for this many epochs (0 = disabled)",
 )
+parser.add_argument(
+    "--resume",
+    type=str,
+    default="",
+    help="Path to a full training checkpoint (_best.pth) to resume from",
+)
 
 args = parser.parse_args()
 
@@ -101,6 +107,12 @@ def main():
         temporal_attention_causal=not args.no_temporal_causal_mask,
     )
 
+    # Fixed path for the resumable checkpoint (overwritten on every new best)
+    best_ckpt_path = f"{args.save}_best.pth"
+    save_dir = os.path.dirname(best_ckpt_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
     print("start training...", flush=True)
     his_loss = []
     val_time = []
@@ -108,11 +120,29 @@ def main():
 
     best_val_loss = float("inf")
     best_epoch = 0
-    best_ckpt_path = None
     patience_counter = 0
     early_stopped = False
+    start_epoch = 1
 
-    for epoch in range(1, args.epochs + 1):
+    if args.resume:
+        if not os.path.exists(args.resume):
+            raise FileNotFoundError(f"Resume checkpoint not found: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device)
+        engine.model.load_state_dict(ckpt["model_state_dict"])
+        engine.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        best_val_loss = ckpt["best_val_loss"]
+        best_epoch = ckpt["best_epoch"]
+        patience_counter = ckpt.get("patience_counter", 0)
+        his_loss = ckpt.get("his_loss", [])
+        print(
+            f"Resumed from epoch {ckpt['epoch']} — "
+            f"best val loss so far: {best_val_loss:.4f} (epoch {best_epoch}), "
+            f"patience counter: {patience_counter}/{args.early_stopping_patience}",
+            flush=True,
+        )
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss, train_mape, train_rmse = [], [], []
         t1 = time.time()
         dataloader["train_loader"].shuffle()
@@ -153,9 +183,19 @@ def main():
             best_val_loss = mvalid_loss
             best_epoch = epoch
             patience_counter = 0
-            best_ckpt_path = f"{args.save}_epoch_{epoch}_{round(mvalid_loss, 2):.2f}.pth"
-            torch.save(engine.model.state_dict(), best_ckpt_path)
-            tag = " [NEW BEST]"
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": engine.model.state_dict(),
+                    "optimizer_state_dict": engine.optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                    "best_epoch": best_epoch,
+                    "patience_counter": patience_counter,
+                    "his_loss": his_loss,
+                },
+                best_ckpt_path,
+            )
+            tag = " [NEW BEST — saved]"
         else:
             patience_counter += 1
             tag = f" (no improvement {patience_counter}/{args.early_stopping_patience})" if args.early_stopping_patience > 0 else ""
@@ -182,8 +222,9 @@ def main():
     if early_stopped:
         print(f"Training stopped early at epoch {epoch} of {args.epochs}.", flush=True)
 
-    # Reload best checkpoint and test
-    engine.model.load_state_dict(torch.load(best_ckpt_path))
+    # Reload best model weights for test evaluation
+    best_ckpt = torch.load(best_ckpt_path, map_location=device)
+    engine.model.load_state_dict(best_ckpt["model_state_dict"])
     print(f"Training finished. Best validation loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     outputs = []
