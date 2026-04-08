@@ -45,6 +45,12 @@ parser.add_argument(
 parser.add_argument("--temporal_attention_heads", type=int, default=4, help="Temporal attention heads")
 parser.add_argument("--temporal_attention_dropout", type=float, default=0.0, help="Temporal attention dropout")
 parser.add_argument("--no_temporal_causal_mask", action="store_true", help="Disable causal mask in temporal attention")
+parser.add_argument(
+    "--early_stopping_patience",
+    type=int,
+    default=10,
+    help="Stop training if val loss does not improve for this many epochs (0 = disabled)",
+)
 
 args = parser.parse_args()
 
@@ -100,6 +106,12 @@ def main():
     val_time = []
     train_time = []
 
+    best_val_loss = float("inf")
+    best_epoch = 0
+    best_ckpt_path = None
+    patience_counter = 0
+    early_stopped = False
+
     for epoch in range(1, args.epochs + 1):
         train_loss, train_mape, train_rmse = [], [], []
         t1 = time.time()
@@ -130,30 +142,49 @@ def main():
             valid_mape.append(metrics[1])
             valid_rmse.append(metrics[2])
         s2 = time.time()
-        print(f"Epoch: {epoch:03d}, Inference Time: {s2 - s1:.4f} secs")
         val_time.append(s2 - s1)
 
         mtrain_loss = np.mean(train_loss)
         mvalid_loss = np.mean(valid_loss)
         his_loss.append(mvalid_loss)
+
+        improved = mvalid_loss < best_val_loss
+        if improved:
+            best_val_loss = mvalid_loss
+            best_epoch = epoch
+            patience_counter = 0
+            best_ckpt_path = f"{args.save}_epoch_{epoch}_{round(mvalid_loss, 2):.2f}.pth"
+            torch.save(engine.model.state_dict(), best_ckpt_path)
+            tag = " [NEW BEST]"
+        else:
+            patience_counter += 1
+            tag = f" (no improvement {patience_counter}/{args.early_stopping_patience})" if args.early_stopping_patience > 0 else ""
+
         print(
             f"Epoch: {epoch:03d}, "
             f"Train Loss: {mtrain_loss:.4f}, Train MAPE: {np.mean(train_mape):.4f}, Train RMSE: {np.mean(train_rmse):.4f}, "
             f"Valid Loss: {mvalid_loss:.4f}, Valid MAPE: {np.mean(valid_mape):.4f}, Valid RMSE: {np.mean(valid_rmse):.4f}, "
-            f"Training Time: {t2 - t1:.4f}/epoch",
+            f"Training Time: {t2 - t1:.4f}/epoch{tag}",
             flush=True,
         )
-        ckpt_path = f"{args.save}_epoch_{epoch}_{round(mvalid_loss, 2):.2f}.pth"
-        torch.save(engine.model.state_dict(), ckpt_path)
+
+        if args.early_stopping_patience > 0 and patience_counter >= args.early_stopping_patience:
+            print(
+                f"Early stopping triggered at epoch {epoch}. "
+                f"No improvement in val loss for {args.early_stopping_patience} consecutive epochs.",
+                flush=True,
+            )
+            early_stopped = True
+            break
 
     print(f"Average Training Time: {np.mean(train_time):.4f} secs/epoch")
     print(f"Average Inference Time: {np.mean(val_time):.4f} secs")
+    if early_stopped:
+        print(f"Training stopped early at epoch {epoch} of {args.epochs}.", flush=True)
 
     # Reload best checkpoint and test
-    bestid = np.argmin(his_loss)
-    best_path = f"{args.save}_epoch_{bestid + 1}_{round(his_loss[bestid], 2):.2f}.pth"
-    engine.model.load_state_dict(torch.load(best_path))
-    print(f"Training finished. Best validation loss: {his_loss[bestid]:.4f} (epoch {bestid + 1})")
+    engine.model.load_state_dict(torch.load(best_ckpt_path))
+    print(f"Training finished. Best validation loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     outputs = []
     realy = torch.Tensor(dataloader["y_test"]).to(device).transpose(1, 3)[:, 0, :, :]
@@ -197,7 +228,7 @@ def main():
     )
     torch.save(
         engine.model.state_dict(),
-        f"{args.save}_exp{args.expid}_best_{round(his_loss[bestid], 2):.2f}.pth",
+        f"{args.save}_exp{args.expid}_best_{round(best_val_loss, 2):.2f}.pth",
     )
 
     selected_horizons = []
@@ -222,7 +253,7 @@ def main():
             if args.temporal_attention
             else "baseline"
         ),
-        "best_val_mae": float(his_loss[bestid]),
+        "best_val_mae": float(best_val_loss),
         "average_metrics": {
             "mae": float(np.mean(amae)),
             "mape": float(np.mean(amape)),

@@ -55,7 +55,46 @@ adj_mx.pkl  adj_mx_bay.pkl
 
 ---
 
-## 2. Tổng quan các biến thể cải tiến
+## 2. Lệnh `train.py` đã bao gồm test chưa?
+
+**Có.** Sau khi toàn bộ vòng lặp epoch kết thúc (hoặc dừng sớm do early stopping), `train.py` tự động:
+
+1. Load lại checkpoint có val loss thấp nhất.
+2. Chạy inference trên tập test.
+3. In MAE/MAPE/RMSE cho từng horizon 1–12 và trung bình 12 horizon.
+4. Lưu file JSON tổng hợp kết quả (nếu có `--metrics_out`).
+
+**Không cần chạy thêm `test.py`** trừ khi muốn đánh giá lại một checkpoint cụ thể sau đó.
+
+---
+
+## 3. Early Stopping và lưu checkpoint
+
+Từ phiên bản cải tiến này, `train.py` thay đổi hai hành vi quan trọng so với baseline:
+
+| Hành vi | Baseline cũ | Phiên bản mới |
+|---|---|---|
+| Lưu checkpoint | Sau **mỗi** epoch | Chỉ khi có **val loss mới thấp hơn** |
+| Dừng huấn luyện | Luôn chạy hết `--epochs` | Dừng sớm nếu không cải thiện `--early_stopping_patience` epoch liên tiếp |
+
+**Tham số điều chỉnh:**
+
+- `--early_stopping_patience 10` _(mặc định)_ — dừng sau 10 epoch không cải thiện.
+- `--early_stopping_patience 0` — tắt early stopping, chạy hết `--epochs`.
+
+**Log mẫu khi chạy:**
+```
+Epoch: 042, ..., Valid Loss: 3.0421, ...  [NEW BEST]
+Epoch: 043, ..., Valid Loss: 3.0498, ...  (no improvement 1/10)
+...
+Epoch: 052, ..., Valid Loss: 3.0711, ...  (no improvement 10/10)
+Early stopping triggered at epoch 52. No improvement in val loss for 10 consecutive epochs.
+Training finished. Best validation loss: 3.0421 (epoch 42)
+```
+
+---
+
+## 4. Tổng quan các biến thể cải tiến
 
 | `--model_variant` | Mô tả |
 |---|---|
@@ -67,9 +106,14 @@ Tất cả biến thể đều tương thích ngược với cấu hình baselin
 
 ---
 
-## 3. Chạy từng biến thể
+## 5. Chạy từng biến thể
 
-### 3.1 Spatial Attention — METR-LA
+Mỗi lệnh dưới đây tự động:
+- Lưu checkpoint chỉ khi val loss cải thiện.
+- Dừng sớm sau 10 epoch không cải thiện (`--early_stopping_patience 10`).
+- Chạy test trên tập test và lưu kết quả JSON.
+
+### 5.1 Spatial Attention — METR-LA
 
 ```bash
 !python train.py \
@@ -82,12 +126,13 @@ Tất cả biến thể đều tương thích ngược với cấu hình baselin
   --model_variant spatial \
   --seed 42 \
   --epochs 100 \
+  --early_stopping_patience 10 \
   --save garage/metr_spatial \
   --expid 1 \
   --metrics_out garage/metrics/metr_spatial_seed42.json
 ```
 
-### 3.2 Temporal Attention — METR-LA
+### 5.2 Temporal Attention — METR-LA
 
 ```bash
 !python train.py \
@@ -101,12 +146,13 @@ Tất cả biến thể đều tương thích ngược với cấu hình baselin
   --temporal_attention_heads 4 \
   --seed 42 \
   --epochs 100 \
+  --early_stopping_patience 10 \
   --save garage/metr_temporal \
   --expid 1 \
   --metrics_out garage/metrics/metr_temporal_seed42.json
 ```
 
-### 3.3 Spatiotemporal Attention (joint) — METR-LA
+### 5.3 Spatiotemporal Attention (joint) — METR-LA
 
 ```bash
 !python train.py \
@@ -120,6 +166,7 @@ Tất cả biến thể đều tương thích ngược với cấu hình baselin
   --temporal_attention_heads 4 \
   --seed 42 \
   --epochs 100 \
+  --early_stopping_patience 10 \
   --save garage/metr_st \
   --expid 1 \
   --metrics_out garage/metrics/metr_st_seed42.json
@@ -127,7 +174,7 @@ Tất cả biến thể đều tương thích ngược với cấu hình baselin
 
 ---
 
-## 4. Chạy trên PEMS-BAY (tùy chọn)
+## 6. Chạy trên PEMS-BAY (tùy chọn)
 
 Thay các tham số sau cho dataset PEMS-BAY:
 
@@ -153,6 +200,7 @@ Ví dụ — Spatiotemporal trên PEMS-BAY:
   --temporal_attention_heads 4 \
   --seed 42 \
   --epochs 100 \
+  --early_stopping_patience 10 \
   --save garage/bay_st \
   --expid 1 \
   --metrics_out garage/metrics/bay_st_seed42.json
@@ -160,9 +208,9 @@ Ví dụ — Spatiotemporal trên PEMS-BAY:
 
 ---
 
-## 5. Kiểm tra một checkpoint đã train
+## 7. Kiểm tra một checkpoint đã train (tùy chọn)
 
-Dùng `test.py` khi muốn đánh giá lại một checkpoint cụ thể mà không cần train lại:
+Vì `train.py` đã chạy test tự động, `test.py` chỉ cần dùng khi muốn đánh giá lại một checkpoint cụ thể mà không train lại:
 
 ```bash
 !python test.py \
@@ -183,7 +231,7 @@ Dùng `test.py` khi muốn đánh giá lại một checkpoint cụ thể mà kh�
 
 ---
 
-## 6. Đọc kết quả metrics JSON
+## 8. Đọc kết quả metrics JSON
 
 ```python
 import json
@@ -209,7 +257,7 @@ Output mẫu:
 
 ---
 
-## 7. Lưu ý khi dùng Colab
+## 9. Lưu ý khi dùng Colab
 
 | Vấn đề | Giải pháp |
 |---|---|
@@ -221,7 +269,7 @@ Output mẫu:
 
 ---
 
-## 8. Tham chiếu nhanh — tất cả cờ cải tiến
+## 10. Tham chiếu nhanh — tất cả cờ cải tiến
 
 | Cờ | Mặc định | Mô tả |
 |---|---|---|
@@ -234,3 +282,4 @@ Output mẫu:
 | `--seed` | 42 | Random seed để tái lập kết quả |
 | `--eval_horizons` | `3,6,12` | Các horizon hiển thị trong summary |
 | `--metrics_out` | _(không lưu)_ | Đường dẫn file JSON lưu kết quả |
+| `--early_stopping_patience` | 10 | Dừng sớm nếu val loss không cải thiện sau N epoch (0 = tắt) |
