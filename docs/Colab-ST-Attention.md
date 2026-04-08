@@ -19,25 +19,28 @@ drive.mount('/content/drive')
 
 ### 1.3 Clone repo và cài dependencies
 
+Thêm `repo` ở cuối lệnh clone để Colab đặt tên thư mục là `repo` thay vì tên mặc định dài:
+
 ```bash
-!git clone https://github.com/nhatvu205/innovations-on-graph-wavenet-for-spatial-temporal-graph-modeling.git
-%cd innovations-on-graph-wavenet-for-spatial-temporal-graph-modeling
+!git clone https://github.com/nhatvu205/innovations-on-graph-wavenet-for-spatial-temporal-graph-modeling.git repo
+%cd repo
 !pip install -r requirements.txt -q
 ```
 
-### 1.4 Kết nối thư mục data và garage từ Drive
+### 1.4 Kết nối thư mục data từ Drive và tạo garage cục bộ
 
-Thay `YOUR_DRIVE_PATH` bằng đường dẫn thực tế bạn đã lưu dữ liệu trên Drive (ví dụ: `MyDrive/graph-wavenet`):
+`data/` được symlink từ Drive (dùng lại dữ liệu đã tải). `garage/` được tạo **local bên trong thư mục `repo`** để checkpoint của thí nghiệm này tách biệt hoàn toàn với các thí nghiệm khác.
+
+Thay `YOUR_DRIVE_PATH` bằng đường dẫn thực tế trên Drive của bạn (ví dụ: `MyDrive/graph-wavenet`):
 
 ```bash
 DRIVE_ROOT="/content/drive/MyDrive/graph-wavenet"
 
-# Tạo symlink để train.py tìm đúng đường dẫn mặc định
+# Symlink data từ Drive (chỉ đọc, không ghi)
 !ln -sfn "$DRIVE_ROOT/data" data
-!ln -sfn "$DRIVE_ROOT/garage" garage
 
-# Tạo thư mục garage/metrics nếu chưa có
-!mkdir -p "$DRIVE_ROOT/garage/metrics"
+# Tạo garage cục bộ trong repo — checkpoint lưu tại đây
+!mkdir -p garage/metrics
 ```
 
 Kiểm tra dữ liệu tồn tại:
@@ -261,11 +264,25 @@ Output mẫu:
 
 | Vấn đề | Giải pháp |
 |---|---|
-| Session bị ngắt giữa chừng | Checkpoint được lưu sau mỗi epoch vào Drive qua symlink — chỉ cần re-mount và tiếp tục |
-| Session reset hoàn toàn | Clone lại repo, re-mount Drive, symlink lại `data/` và `garage/` |
+| Session bị ngắt giữa chừng | Checkpoint nằm **local** trong `repo/garage/` — bị mất khi session reset. Copy checkpoint quan trọng lên Drive ngay sau khi train xong (xem bên dưới) |
+| Session reset hoàn toàn | Clone lại repo thành `repo`, re-mount Drive, symlink lại `data/`, tạo lại `garage/metrics/`. Checkpoint cũ khôi phục từ Drive nếu đã copy |
 | Colab T4 hết bộ nhớ GPU | Giảm `--batch_size` xuống 32 |
 | Muốn chạy nhanh thử | Thêm `--epochs 10` để kiểm tra pipeline trước |
 | Muốn disable causal mask trong temporal attention | Thêm cờ `--no_temporal_causal_mask` |
+
+**Sao lưu checkpoint và metrics lên Drive sau khi train:**
+
+```bash
+DRIVE_ROOT="/content/drive/MyDrive/graph-wavenet"
+
+# Tạo thư mục backup trên Drive nếu chưa có
+!mkdir -p "$DRIVE_ROOT/garage-st-attention/metrics"
+
+# Copy toàn bộ checkpoint và metrics JSON
+!cp garage/*.pth "$DRIVE_ROOT/garage-st-attention/" 2>/dev/null || true
+!cp garage/metrics/*.json "$DRIVE_ROOT/garage-st-attention/metrics/" 2>/dev/null || true
+echo "Backup done."
+```
 
 ---
 
