@@ -2,6 +2,9 @@ import torch
 import numpy as np
 import argparse
 import time
+import random
+import json
+import os
 
 from src import util
 from src.engine import trainer
@@ -27,11 +30,38 @@ parser.add_argument("--epochs", type=int, default=100, help="Number of training 
 parser.add_argument("--print_every", type=int, default=50, help="Log interval (iterations)")
 parser.add_argument("--save", type=str, default="./garage/metr", help="Checkpoint save prefix")
 parser.add_argument("--expid", type=int, default=1, help="Experiment ID")
+parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+parser.add_argument("--eval_horizons", type=str, default="3,6,12", help="Comma-separated horizons for report")
+parser.add_argument("--metrics_out", type=str, default="", help="Optional JSON path for saving metrics summary")
+parser.add_argument("--spatial_attention", action="store_true", help="Enable dynamic spatial attention support")
+parser.add_argument("--temporal_attention", action="store_true", help="Enable temporal self-attention branch")
+parser.add_argument(
+    "--model_variant",
+    type=str,
+    default="",
+    choices=["", "baseline", "spatial", "temporal", "spatiotemporal"],
+    help="Optional shorthand to configure attention toggles for ablation",
+)
+parser.add_argument("--temporal_attention_heads", type=int, default=4, help="Temporal attention heads")
+parser.add_argument("--temporal_attention_dropout", type=float, default=0.0, help="Temporal attention dropout")
+parser.add_argument("--no_temporal_causal_mask", action="store_true", help="Disable causal mask in temporal attention")
 
 args = parser.parse_args()
 
 
 def main():
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    if args.model_variant:
+        args.spatial_attention = args.model_variant in ("spatial", "spatiotemporal")
+        args.temporal_attention = args.model_variant in ("temporal", "spatiotemporal")
+
     device = torch.device(args.device)
     sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata, args.adjtype)
     dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
@@ -58,6 +88,11 @@ def main():
         args.gcn_bool,
         args.addaptadj,
         adjinit,
+        spatial_attention=args.spatial_attention,
+        temporal_attention=args.temporal_attention,
+        temporal_attention_heads=args.temporal_attention_heads,
+        temporal_attention_dropout=args.temporal_attention_dropout,
+        temporal_attention_causal=not args.no_temporal_causal_mask,
     )
 
     print("start training...", flush=True)
@@ -133,6 +168,7 @@ def main():
     yhat = torch.cat(outputs, dim=0)[: realy.size(0), ...]
 
     amae, amape, armse = [], [], []
+    per_horizon = []
     for i in range(12):
         pred = scaler.inverse_transform(yhat[:, :, i])
         real = realy[:, :, i]
@@ -144,7 +180,17 @@ def main():
         amae.append(metrics[0])
         amape.append(metrics[1])
         armse.append(metrics[2])
+        per_horizon.append(
+            {
+                "horizon": i + 1,
+                "mae": float(metrics[0]),
+                "mape": float(metrics[1]),
+                "rmse": float(metrics[2]),
+            }
+        )
 
+    avg_training_time = float(np.mean(train_time))
+    avg_inference_time = float(np.mean(val_time))
     print(
         f"On average over 12 horizons, "
         f"Test MAE: {np.mean(amae):.4f}, Test MAPE: {np.mean(amape):.4f}, Test RMSE: {np.mean(armse):.4f}"
@@ -153,6 +199,58 @@ def main():
         engine.model.state_dict(),
         f"{args.save}_exp{args.expid}_best_{round(his_loss[bestid], 2):.2f}.pth",
     )
+
+    selected_horizons = []
+    for token in args.eval_horizons.split(","):
+        token = token.strip()
+        if token:
+            idx = int(token)
+            if 1 <= idx <= 12:
+                selected_horizons.append(idx)
+    if not selected_horizons:
+        selected_horizons = [3, 6, 12]
+
+    horizon_slice = [per_horizon[h - 1] for h in selected_horizons]
+    summary = {
+        "seed": args.seed,
+        "model_variant": (
+            "spatiotemporal_attn"
+            if args.spatial_attention and args.temporal_attention
+            else "spatial_attn"
+            if args.spatial_attention
+            else "temporal_attn"
+            if args.temporal_attention
+            else "baseline"
+        ),
+        "best_val_mae": float(his_loss[bestid]),
+        "average_metrics": {
+            "mae": float(np.mean(amae)),
+            "mape": float(np.mean(amape)),
+            "rmse": float(np.mean(armse)),
+        },
+        "selected_horizons": horizon_slice,
+        "latency": {
+            "train_seconds_per_epoch": avg_training_time,
+            "val_seconds_per_epoch": avg_inference_time,
+        },
+        "all_horizons": per_horizon,
+    }
+    print(
+        "Selected horizons summary: "
+        + ", ".join(
+            [
+                f"h{item['horizon']}: MAE {item['mae']:.4f}, MAPE {item['mape']:.4f}, RMSE {item['rmse']:.4f}"
+                for item in horizon_slice
+            ]
+        )
+    )
+    if args.metrics_out:
+        metrics_dir = os.path.dirname(args.metrics_out)
+        if metrics_dir:
+            os.makedirs(metrics_dir, exist_ok=True)
+        with open(args.metrics_out, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        print(f"Saved metrics summary to: {args.metrics_out}")
 
 
 if __name__ == "__main__":

@@ -44,6 +44,11 @@ class trainer:
         gcn_bool,
         addaptadj,
         aptinit,
+        spatial_attention=False,
+        temporal_attention=False,
+        temporal_attention_heads=4,
+        temporal_attention_dropout=0.0,
+        temporal_attention_causal=True,
     ):
         self.model = gwnet(
             device,
@@ -59,6 +64,11 @@ class trainer:
             dilation_channels=nhid,
             skip_channels=nhid * 8,
             end_channels=nhid * 16,
+            spatial_attention=spatial_attention,
+            temporal_attention=temporal_attention,
+            temporal_attention_heads=temporal_attention_heads,
+            temporal_attention_dropout=temporal_attention_dropout,
+            temporal_attention_causal=temporal_attention_causal,
         )
         self.model.to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lrate, weight_decay=wdecay)

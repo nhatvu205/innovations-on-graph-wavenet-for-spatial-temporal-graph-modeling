@@ -9,6 +9,11 @@ gcn_bool: true
 addaptadj: true
 randomadj: true
 aptonly: false
+spatial_attention: false
+temporal_attention: false
+temporal_attention_heads: 4
+temporal_attention_dropout: 0.0
+temporal_attention_causal: true
 seq_length: 12
 nhid: 32
 in_dim: 2
@@ -25,3 +30,6 @@ print_every: 50
 # Checkpointing
 save: "garage/metr"
 expid: 1
+seed: 42
+eval_horizons: "3,6,12"
+metrics_out: "garage/metrics/metr_baseline_seed42.json"
