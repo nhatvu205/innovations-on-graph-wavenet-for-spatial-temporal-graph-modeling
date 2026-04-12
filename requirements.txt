@@ -2,6 +2,6 @@ matplotlib
 numpy
 scipy
 pandas
-torch
+# torch  # Pre-installed on Colab/Kaggle. For local setup, install via https://pytorch.org/get-started/locally/
 PyYAML
 tables
