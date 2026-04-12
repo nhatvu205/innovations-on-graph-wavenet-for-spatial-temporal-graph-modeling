@@ -127,7 +127,7 @@ def main():
     if args.resume:
         if not os.path.exists(args.resume):
             raise FileNotFoundError(f"Resume checkpoint not found: {args.resume}")
-        ckpt = torch.load(args.resume, map_location=device)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         engine.model.load_state_dict(ckpt["model_state_dict"])
         engine.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"] + 1
@@ -223,7 +223,7 @@ def main():
         print(f"Training stopped early at epoch {epoch} of {args.epochs}.", flush=True)
 
     # Reload best model weights for test evaluation
-    best_ckpt = torch.load(best_ckpt_path, map_location=device)
+    best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
     engine.model.load_state_dict(best_ckpt["model_state_dict"])
     print(f"Training finished. Best validation loss: {best_val_loss:.4f} (epoch {best_epoch})")
 

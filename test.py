@@ -89,7 +89,7 @@ def main():
         temporal_attention_dropout=args.temporal_attention_dropout,
         temporal_attention_causal=not args.no_temporal_causal_mask,
     )
-    engine.model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    engine.model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False))
     engine.model.eval()
     print(f"Loaded checkpoint: {args.checkpoint}")
 
