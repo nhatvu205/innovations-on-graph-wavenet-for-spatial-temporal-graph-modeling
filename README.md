@@ -1,4 +1,4 @@
-# oward Dynamic Spatio-Temporal Traffic Forecasting: A Graph WaveNet Framework with Adaptive Adjacency and Causal Attention
+# Toward Dynamic Spatio-Temporal Traffic Forecasting: A Graph WaveNet Framework with Adaptive Adjacency and Causal Attention
 
 Experiments on top of the original **Graph WaveNet** (Wu et al., IJCAI 2019).
 
