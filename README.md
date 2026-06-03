@@ -1,4 +1,4 @@
-# Graph WaveNet — Improvement Experiments
+# oward Dynamic Spatio-Temporal Traffic Forecasting: A Graph WaveNet Framework with Adaptive Adjacency and Causal Attention
 
 Experiments on top of the original **Graph WaveNet** (Wu et al., IJCAI 2019).
 
@@ -193,36 +193,3 @@ Key flags:
 | `mod_02_efficiency_family` | Efficiency-focused variants from optimization notebooks |
 | `mod_03_dynamic_adj` | Converted from notebook experiment using dynamic adaptive adjacency |
 | `mod_04_ablation_family` | Converted from notebook ablations: `full`, `wo_adaptive`, `wo_attention`, ... |
-
----
-
-## Expected Results (Paper, Table 1)
-
-### METR-LA
-
-| Horizon | MAE | MAPE | RMSE |
-|---|---|---|---|
-| 15 min | 2.69 | 6.90% | 5.15 |
-| 30 min | 3.07 | 8.06% | 6.22 |
-| 60 min | 3.53 | 9.56% | 7.37 |
-
-### PEMS-BAY
-
-| Horizon | MAE | MAPE | RMSE |
-|---|---|---|---|
-| 15 min | 1.30 | 2.73% | 2.74 |
-| 30 min | 1.63 | 3.70% | 3.67 |
-| 60 min | 2.20 | 5.19% | 4.96 |
-
----
-
-## Citation
-
-```bibtex
-@inproceedings{wu2019graph,
-  title     = {Graph WaveNet for Deep Spatial-Temporal Graph Modeling},
-  author    = {Wu, Zonghan and Pan, Shirui and Long, Guodong and Jiang, Jing and Zhang, Chengqi},
-  booktitle = {Proceedings of the 28th International Joint Conference on Artificial Intelligence (IJCAI)},
-  year      = {2019}
-}
-```
