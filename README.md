@@ -16,6 +16,17 @@ Graph WaveNet combines a **WaveNet-style gated TCN** for temporal modelling with
 
 ---
 
+## Notebook provenance
+
+This repository now keeps the **maintained code** in modular experiment folders such as `mod_01_st_attention/`, `mod_02_efficiency_family/`, `mod_03_dynamic_adj/`, and `mod_04_ablation_family/`.
+
+- To inspect the **original notebook-based work**, see `ref-artifacts/`.
+- To inspect the **current module implementation/configuration**, see the relevant `mod_*` folder.
+
+The notebook-derived ablation code was converted into Python modules so experiments can be trained and evaluated consistently from the repo root. The original notebooks are kept in `ref-artifacts/` as reference only.
+
+---
+
 ## Repository Structure
 
 ```
@@ -24,7 +35,7 @@ Graph WaveNet combines a **WaveNet-style gated TCN** for temporal modelling with
 │   ├── util.py                      # DataLoader, StandardScaler, adj helpers, metrics
 │   └── helper.py                    # build_transition_matrices
 │
-├── mod_01_modular_components/       # Modular component refactor
+├── mod_01_st_attention/            # Graph WaveNet with spatial/temporal attention variants
 │   ├── DiffusionGraphConv.py        # K-step diffusion GCN (standalone class)
 │   ├── GatedTCN.py                  # Gated TCN hierarchy (Layer → Block → Stack)
 │   ├── SelfAdaptiveAdjacency.py     # Adaptive adjacency via nn.Embedding
@@ -34,13 +45,17 @@ Graph WaveNet combines a **WaveNet-style gated TCN** for temporal modelling with
 │   └── test.py                      # evaluation entry point
 │
 ├── generate_training_data.py        # raw HDF5 → train/val/test .npz
+├── mod_02_efficiency_family/       # efficiency-focused variants for faster train/inference
+├── mod_03_dynamic_adj/             # Graph WaveNet with dynamic adaptive adjacency
+├── mod_04_ablation_family/         # notebook-derived ablation family (full / wo_adaptive / wo_attention)
+├── ref-artifacts/                  # original notebooks and reference artifacts
 ├── configs/
 │   ├── metr_la.yaml
 │   └── pems_bay.yaml
 └── docs/
 ```
 
-Each `mod_XX_<name>/` folder is a self-contained experiment. To add a new improvement, create a new folder following the same layout and swap out `model.py`.
+The current modular code in this repo was derived from the original notebook experiments. If you want to inspect the original exploratory work, see `ref-artifacts/`. If you want to inspect the maintained implementation/configuration for each approach, see the corresponding `mod_*` folder.
 
 ---
 
@@ -91,14 +106,30 @@ Split: **70 / 10 / 20** chronological. Input/output: **12 steps** each.
 
 ---
 
+## Maintained modules
+
+Use the links below to inspect each maintained direction:
+
+- [`mod_01_st_attention`](./mod_01_st_attention/README.md): spatial/temporal attention variants on top of Graph WaveNet.
+- [`mod_02_efficiency_family`](./mod_02_efficiency_family/README.md): efficiency-focused variants (`static_adj_opt`, `attn_skipagg_opt`).
+- [`mod_03_dynamic_adj`](./mod_03_dynamic_adj/README.md): dynamic adaptive adjacency matrix variant.
+- [`mod_04_ablation_family`](./mod_04_ablation_family/README.md): notebook-derived ablation family (`full`, `wo_adaptive`, `wo_attention`, ...).
+
+Reference notebooks for the original exploratory work are kept in:
+
+- [`ref-artifacts/mod_01`](./ref-artifacts/mod_01/)
+- [`ref-artifacts/mod_02`](./ref-artifacts/mod_02/)
+- [`ref-artifacts/mod_03`](./ref-artifacts/mod_03/)
+- [`ref-artifacts/mod_04`](./ref-artifacts/mod_04/)
+
 ## Running an Experiment
 
-All experiments are run as modules from the **repo root** (required for relative imports):
+All maintained experiments are run as modules from the **repo root** (required for relative imports):
 
 ### Training
 
 ```bash
-python -m mod_01_modular_components.train \
+python -m mod_01_st_attention.train \
     --device cuda:0 \
     --data data/METR-LA \
     --adjdata data/sensor_graph/adj_mx.pkl \
@@ -110,10 +141,27 @@ python -m mod_01_modular_components.train \
     --save garage/metr
 ```
 
+### Other maintained module variants
+
+For the notebook-derived ablation family, use `mod_04_ablation_family` instead:
+
+```bash
+python -m mod_04_ablation_family.train \
+    --device cuda:0 \
+    --data data/METR-LA \
+    --adjdata data/sensor_graph/adj_mx.pkl \
+    --adjtype doubletransition \
+    --gcn_bool \
+    --addaptadj \
+    --num_nodes 207 \
+    --save garage/mod04_full \
+    --model_variant full
+```
+
 ### Evaluation
 
 ```bash
-python -m mod_01_modular_components.test \
+python -m mod_01_st_attention.test \
     --device cuda:0 \
     --data data/METR-LA \
     --adjdata data/sensor_graph/adj_mx.pkl \
@@ -141,7 +189,10 @@ Key flags:
 
 | Folder | Description |
 |---|---|
-| `mod_01_modular_components` | Refactor: each component (DiffusionGCN, GatedTCN, SelfAdaptiveAdj) as a standalone class |
+| `mod_01_st_attention` | Graph WaveNet variant with spatial/temporal attention options |
+| `mod_02_efficiency_family` | Efficiency-focused variants from optimization notebooks |
+| `mod_03_dynamic_adj` | Converted from notebook experiment using dynamic adaptive adjacency |
+| `mod_04_ablation_family` | Converted from notebook ablations: `full`, `wo_adaptive`, `wo_attention`, ... |
 
 ---
 
