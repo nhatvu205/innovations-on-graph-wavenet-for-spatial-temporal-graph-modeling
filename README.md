@@ -1,12 +1,10 @@
-# Graph WaveNet — Baseline Implementation
+# Graph WaveNet — Improvement Experiments
 
-Re-implementation of the baseline from:
+Experiments on top of the original **Graph WaveNet** (Wu et al., IJCAI 2019).
 
 > **Graph WaveNet for Deep Spatial-Temporal Graph Modeling**  
 > Zonghan Wu, Shirui Pan, Guodong Long, Jing Jiang, Chengqi Zhang  
-> IJCAI 2019 · [arXiv:1906.00121](https://arxiv.org/abs/1906.00121)
-
-Official code: https://github.com/nnzhan/Graph-WaveNet
+> IJCAI 2019 · [arXiv:1906.00121](https://arxiv.org/abs/1906.00121) · [Official code](https://github.com/nnzhan/Graph-WaveNet)
 
 ---
 
@@ -18,26 +16,31 @@ Graph WaveNet combines a **WaveNet-style gated TCN** for temporal modelling with
 
 ---
 
-## Project Structure
+## Repository Structure
 
 ```
 .
-├── AGENT.md                     # AI-agent cheat-sheet (read first)
-├── README.md                    # this file
-├── baseline_implementation.md   # 4-phase project plan
-├── requirements.txt
-├── .gitignore
-├── generate_training_data.py    # data preprocessing
-├── src/
-│   ├── model.py                 # gwnet, gcn, nconv, linear
-│   ├── util.py                  # data loaders, metrics, adj helpers
-│   └── engine.py                # trainer (train/eval loops)
-├── train.py                     # training entry point
-├── test.py                      # evaluation entry point
-└── configs/
-    ├── metr_la.yaml
-    └── pems_bay.yaml
+├── shared/                          # utilities shared across all experiments
+│   ├── util.py                      # DataLoader, StandardScaler, adj helpers, metrics
+│   └── helper.py                    # build_transition_matrices
+│
+├── mod_01_modular_components/       # Modular component refactor
+│   ├── DiffusionGraphConv.py        # K-step diffusion GCN (standalone class)
+│   ├── GatedTCN.py                  # Gated TCN hierarchy (Layer → Block → Stack)
+│   ├── SelfAdaptiveAdjacency.py     # Adaptive adjacency via nn.Embedding
+│   ├── model.py                     # gwnet assembled from the above components
+│   ├── engine.py                    # trainer (train/eval loops)
+│   ├── train.py                     # training entry point
+│   └── test.py                      # evaluation entry point
+│
+├── generate_training_data.py        # raw HDF5 → train/val/test .npz
+├── configs/
+│   ├── metr_la.yaml
+│   └── pems_bay.yaml
+└── docs/
 ```
+
+Each `mod_XX_<name>/` folder is a self-contained experiment. To add a new improvement, create a new folder following the same layout and swap out `model.py`.
 
 ---
 
@@ -75,12 +78,10 @@ data/
 ```bash
 mkdir -p data/METR-LA data/PEMS-BAY
 
-# METR-LA
 python generate_training_data.py \
     --output_dir=data/METR-LA \
     --traffic_df_filename=data/metr-la.h5
 
-# PEMS-BAY
 python generate_training_data.py \
     --output_dir=data/PEMS-BAY \
     --traffic_df_filename=data/pems-bay.h5
@@ -90,11 +91,14 @@ Split: **70 / 10 / 20** chronological. Input/output: **12 steps** each.
 
 ---
 
-## Training
+## Running an Experiment
+
+All experiments are run as modules from the **repo root** (required for relative imports):
+
+### Training
 
 ```bash
-# Full model — doubletransition adj + adaptive adj (random init)
-python train.py \
+python -m mod_01_modular_components.train \
     --device cuda:0 \
     --data data/METR-LA \
     --adjdata data/sensor_graph/adj_mx.pkl \
@@ -104,6 +108,21 @@ python train.py \
     --randomadj \
     --num_nodes 207 \
     --save garage/metr
+```
+
+### Evaluation
+
+```bash
+python -m mod_01_modular_components.test \
+    --device cuda:0 \
+    --data data/METR-LA \
+    --adjdata data/sensor_graph/adj_mx.pkl \
+    --adjtype doubletransition \
+    --gcn_bool \
+    --addaptadj \
+    --randomadj \
+    --num_nodes 207 \
+    --checkpoint garage/metr_exp1_best_X.XX.pth
 ```
 
 Key flags:
@@ -118,20 +137,11 @@ Key flags:
 
 ---
 
-## Evaluation
+## Experiments
 
-```bash
-python test.py \
-    --device cuda:0 \
-    --data data/METR-LA \
-    --adjdata data/sensor_graph/adj_mx.pkl \
-    --adjtype doubletransition \
-    --gcn_bool \
-    --addaptadj \
-    --randomadj \
-    --num_nodes 207 \
-    --checkpoint garage/metr_exp1_best_X.XX.pth
-```
+| Folder | Description |
+|---|---|
+| `mod_01_modular_components` | Refactor: each component (DiffusionGCN, GatedTCN, SelfAdaptiveAdj) as a standalone class |
 
 ---
 
@@ -152,13 +162,6 @@ python test.py \
 | 15 min | 1.30 | 2.73% | 2.74 |
 | 30 min | 1.63 | 3.70% | 3.67 |
 | 60 min | 2.20 | 5.19% | 4.96 |
-
----
-
-## Implementation Plan
-
-See [`baseline_implementation.md`](baseline_implementation.md) for the full
-4-phase implementation timeline, technical specifications, and expert evaluation.
 
 ---
 

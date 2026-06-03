@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from src.model import gwnet
-from src import util
+from .model import gwnet
+from shared import util
 
 
 class trainer:

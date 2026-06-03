@@ -3,8 +3,8 @@ import numpy as np
 import argparse
 import time
 
-from src import util
-from src.engine import trainer
+from shared import util
+from .engine import trainer
 
 parser = argparse.ArgumentParser(description="Evaluate a trained Graph WaveNet checkpoint")
 parser.add_argument("--device", type=str, default="cuda:0")

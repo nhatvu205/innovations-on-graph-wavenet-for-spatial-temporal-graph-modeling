@@ -3,8 +3,8 @@ import numpy as np
 import argparse
 import time
 
-from src import util
-from src.engine import trainer
+from shared import util
+from .engine import trainer
 
 parser = argparse.ArgumentParser(description="Train Graph WaveNet")
 parser.add_argument("--device", type=str, default="cuda:0", help="Device (e.g. cuda:0 or cpu)")
@@ -114,7 +114,6 @@ def main():
     print(f"Average Training Time: {np.mean(train_time):.4f} secs/epoch")
     print(f"Average Inference Time: {np.mean(val_time):.4f} secs")
 
-    # Reload best checkpoint and test
     bestid = np.argmin(his_loss)
     best_path = f"{args.save}_epoch_{bestid + 1}_{round(his_loss[bestid], 2):.2f}.pth"
     engine.model.load_state_dict(torch.load(best_path))
