@@ -2,6 +2,9 @@ import torch
 import numpy as np
 import argparse
 import time
+import random
+import json
+import os
 
 from shared import util
 from .engine import trainer
@@ -27,11 +30,50 @@ parser.add_argument("--epochs", type=int, default=100, help="Number of training 
 parser.add_argument("--print_every", type=int, default=50, help="Log interval (iterations)")
 parser.add_argument("--save", type=str, default="./garage/metr", help="Checkpoint save prefix")
 parser.add_argument("--expid", type=int, default=1, help="Experiment ID")
+parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+parser.add_argument("--eval_horizons", type=str, default="3,6,12", help="Comma-separated horizons for report")
+parser.add_argument("--metrics_out", type=str, default="", help="Optional JSON path for saving metrics summary")
+parser.add_argument("--spatial_attention", action="store_true", help="Enable dynamic spatial attention support")
+parser.add_argument("--temporal_attention", action="store_true", help="Enable temporal self-attention branch")
+parser.add_argument(
+    "--model_variant",
+    type=str,
+    default="",
+    choices=["", "baseline", "spatial", "temporal", "spatiotemporal"],
+    help="Optional shorthand to configure attention toggles for ablation",
+)
+parser.add_argument("--temporal_attention_heads", type=int, default=4, help="Temporal attention heads")
+parser.add_argument("--temporal_attention_dropout", type=float, default=0.0, help="Temporal attention dropout")
+parser.add_argument("--no_temporal_causal_mask", action="store_true", help="Disable causal mask in temporal attention")
+parser.add_argument(
+    "--early_stopping_patience",
+    type=int,
+    default=10,
+    help="Stop training if val loss does not improve for this many epochs (0 = disabled)",
+)
+parser.add_argument(
+    "--resume",
+    type=str,
+    default="",
+    help="Path to a full training checkpoint (_best.pth) to resume from",
+)
 
 args = parser.parse_args()
 
 
 def main():
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    if args.model_variant:
+        args.spatial_attention = args.model_variant in ("spatial", "spatiotemporal")
+        args.temporal_attention = args.model_variant in ("temporal", "spatiotemporal")
+
     device = torch.device(args.device)
     sensor_ids, sensor_id_to_ind, adj_mx = util.load_adj(args.adjdata, args.adjtype)
     dataloader = util.load_dataset(args.data, args.batch_size, args.batch_size, args.batch_size)
@@ -58,14 +100,49 @@ def main():
         args.gcn_bool,
         args.addaptadj,
         adjinit,
+        spatial_attention=args.spatial_attention,
+        temporal_attention=args.temporal_attention,
+        temporal_attention_heads=args.temporal_attention_heads,
+        temporal_attention_dropout=args.temporal_attention_dropout,
+        temporal_attention_causal=not args.no_temporal_causal_mask,
     )
+
+    # Fixed path for the resumable checkpoint (overwritten on every new best)
+    best_ckpt_path = f"{args.save}_best.pth"
+    save_dir = os.path.dirname(best_ckpt_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
 
     print("start training...", flush=True)
     his_loss = []
     val_time = []
     train_time = []
 
-    for epoch in range(1, args.epochs + 1):
+    best_val_loss = float("inf")
+    best_epoch = 0
+    patience_counter = 0
+    early_stopped = False
+    start_epoch = 1
+
+    if args.resume:
+        if not os.path.exists(args.resume):
+            raise FileNotFoundError(f"Resume checkpoint not found: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        engine.model.load_state_dict(ckpt["model_state_dict"])
+        engine.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        best_val_loss = ckpt["best_val_loss"]
+        best_epoch = ckpt["best_epoch"]
+        patience_counter = ckpt.get("patience_counter", 0)
+        his_loss = ckpt.get("his_loss", [])
+        print(
+            f"Resumed from epoch {ckpt['epoch']} — "
+            f"best val loss so far: {best_val_loss:.4f} (epoch {best_epoch}), "
+            f"patience counter: {patience_counter}/{args.early_stopping_patience}",
+            flush=True,
+        )
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss, train_mape, train_rmse = [], [], []
         t1 = time.time()
         dataloader["train_loader"].shuffle()
@@ -95,29 +172,60 @@ def main():
             valid_mape.append(metrics[1])
             valid_rmse.append(metrics[2])
         s2 = time.time()
-        print(f"Epoch: {epoch:03d}, Inference Time: {s2 - s1:.4f} secs")
         val_time.append(s2 - s1)
 
         mtrain_loss = np.mean(train_loss)
         mvalid_loss = np.mean(valid_loss)
         his_loss.append(mvalid_loss)
+
+        improved = mvalid_loss < best_val_loss
+        if improved:
+            best_val_loss = mvalid_loss
+            best_epoch = epoch
+            patience_counter = 0
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": engine.model.state_dict(),
+                    "optimizer_state_dict": engine.optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                    "best_epoch": best_epoch,
+                    "patience_counter": patience_counter,
+                    "his_loss": his_loss,
+                },
+                best_ckpt_path,
+            )
+            tag = " [NEW BEST — saved]"
+        else:
+            patience_counter += 1
+            tag = f" (no improvement {patience_counter}/{args.early_stopping_patience})" if args.early_stopping_patience > 0 else ""
+
         print(
             f"Epoch: {epoch:03d}, "
             f"Train Loss: {mtrain_loss:.4f}, Train MAPE: {np.mean(train_mape):.4f}, Train RMSE: {np.mean(train_rmse):.4f}, "
             f"Valid Loss: {mvalid_loss:.4f}, Valid MAPE: {np.mean(valid_mape):.4f}, Valid RMSE: {np.mean(valid_rmse):.4f}, "
-            f"Training Time: {t2 - t1:.4f}/epoch",
+            f"Training Time: {t2 - t1:.4f}/epoch{tag}",
             flush=True,
         )
-        ckpt_path = f"{args.save}_epoch_{epoch}_{round(mvalid_loss, 2):.2f}.pth"
-        torch.save(engine.model.state_dict(), ckpt_path)
+
+        if args.early_stopping_patience > 0 and patience_counter >= args.early_stopping_patience:
+            print(
+                f"Early stopping triggered at epoch {epoch}. "
+                f"No improvement in val loss for {args.early_stopping_patience} consecutive epochs.",
+                flush=True,
+            )
+            early_stopped = True
+            break
 
     print(f"Average Training Time: {np.mean(train_time):.4f} secs/epoch")
     print(f"Average Inference Time: {np.mean(val_time):.4f} secs")
+    if early_stopped:
+        print(f"Training stopped early at epoch {epoch} of {args.epochs}.", flush=True)
 
-    bestid = np.argmin(his_loss)
-    best_path = f"{args.save}_epoch_{bestid + 1}_{round(his_loss[bestid], 2):.2f}.pth"
-    engine.model.load_state_dict(torch.load(best_path))
-    print(f"Training finished. Best validation loss: {his_loss[bestid]:.4f} (epoch {bestid + 1})")
+    # Reload best model weights for test evaluation
+    best_ckpt = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+    engine.model.load_state_dict(best_ckpt["model_state_dict"])
+    print(f"Training finished. Best validation loss: {best_val_loss:.4f} (epoch {best_epoch})")
 
     outputs = []
     realy = torch.Tensor(dataloader["y_test"]).to(device).transpose(1, 3)[:, 0, :, :]
@@ -132,6 +240,7 @@ def main():
     yhat = torch.cat(outputs, dim=0)[: realy.size(0), ...]
 
     amae, amape, armse = [], [], []
+    per_horizon = []
     for i in range(12):
         pred = scaler.inverse_transform(yhat[:, :, i])
         real = realy[:, :, i]
@@ -143,15 +252,77 @@ def main():
         amae.append(metrics[0])
         amape.append(metrics[1])
         armse.append(metrics[2])
+        per_horizon.append(
+            {
+                "horizon": i + 1,
+                "mae": float(metrics[0]),
+                "mape": float(metrics[1]),
+                "rmse": float(metrics[2]),
+            }
+        )
 
+    avg_training_time = float(np.mean(train_time))
+    avg_inference_time = float(np.mean(val_time))
     print(
         f"On average over 12 horizons, "
         f"Test MAE: {np.mean(amae):.4f}, Test MAPE: {np.mean(amape):.4f}, Test RMSE: {np.mean(armse):.4f}"
     )
     torch.save(
         engine.model.state_dict(),
-        f"{args.save}_exp{args.expid}_best_{round(his_loss[bestid], 2):.2f}.pth",
+        f"{args.save}_exp{args.expid}_best_{round(best_val_loss, 2):.2f}.pth",
     )
+
+    selected_horizons = []
+    for token in args.eval_horizons.split(","):
+        token = token.strip()
+        if token:
+            idx = int(token)
+            if 1 <= idx <= 12:
+                selected_horizons.append(idx)
+    if not selected_horizons:
+        selected_horizons = [3, 6, 12]
+
+    horizon_slice = [per_horizon[h - 1] for h in selected_horizons]
+    summary = {
+        "seed": args.seed,
+        "model_variant": (
+            "spatiotemporal_attn"
+            if args.spatial_attention and args.temporal_attention
+            else "spatial_attn"
+            if args.spatial_attention
+            else "temporal_attn"
+            if args.temporal_attention
+            else "baseline"
+        ),
+        "best_val_mae": float(best_val_loss),
+        "average_metrics": {
+            "mae": float(np.mean(amae)),
+            "mape": float(np.mean(amape)),
+            "rmse": float(np.mean(armse)),
+        },
+        "selected_horizons": horizon_slice,
+        "latency": {
+            "train_seconds_per_epoch": avg_training_time,
+            "val_seconds_per_epoch": avg_inference_time,
+        },
+        "all_horizons": per_horizon,
+    }
+    print(
+        "Selected horizons summary: "
+        + ", ".join(
+            [
+                f"h{item['horizon']}: MAE {item['mae']:.4f}, MAPE {item['mape']:.4f}, RMSE {item['rmse']:.4f}"
+                for item in horizon_slice
+            ]
+        )
+    )
+    if args.metrics_out:
+        metrics_dir = os.path.dirname(args.metrics_out)
+        if metrics_dir:
+            os.makedirs(metrics_dir, exist_ok=True)
+        with open(args.metrics_out, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        print(f"Saved metrics summary to: {args.metrics_out}")
 
 
 if __name__ == "__main__":

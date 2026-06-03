@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 class nconv(nn.Module):
@@ -63,6 +64,36 @@ class gcn(nn.Module):
         return h
 
 
+class TemporalAttentionLayer(nn.Module):
+    """Temporal self-attention over the time axis for each node."""
+
+    def __init__(self, channels, heads=4, attn_dropout=0.0, causal=True):
+        super(TemporalAttentionLayer, self).__init__()
+        self.channels = channels
+        self.heads = heads
+        self.causal = causal
+        self.attn = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=heads,
+            dropout=attn_dropout,
+            batch_first=True,
+        )
+        self.out_proj = nn.Conv2d(channels, channels, kernel_size=(1, 1))
+
+    def forward(self, x):
+        # x: (B, C, N, T)
+        bsz, channels, num_nodes, seq_len = x.shape
+        seq = x.permute(0, 2, 3, 1).contiguous().view(bsz * num_nodes, seq_len, channels)
+        attn_mask = None
+        if self.causal:
+            attn_mask = torch.triu(
+                torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool), diagonal=1
+            )
+        out, _ = self.attn(seq, seq, seq, attn_mask=attn_mask, need_weights=False)
+        out = out.view(bsz, num_nodes, seq_len, channels).permute(0, 3, 1, 2).contiguous()
+        return self.out_proj(out)
+
+
 class gwnet(nn.Module):
     """
     Graph WaveNet model (Wu et al., IJCAI 2019).
@@ -113,6 +144,11 @@ class gwnet(nn.Module):
         kernel_size=2,
         blocks=4,
         layers=2,
+        spatial_attention=False,
+        temporal_attention=False,
+        temporal_attention_heads=4,
+        temporal_attention_dropout=0.0,
+        temporal_attention_causal=True,
     ):
         super(gwnet, self).__init__()
         self.dropout = dropout
@@ -120,6 +156,8 @@ class gwnet(nn.Module):
         self.layers = layers
         self.gcn_bool = gcn_bool
         self.addaptadj = addaptadj
+        self.spatial_attention = spatial_attention
+        self.temporal_attention = temporal_attention
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -127,6 +165,8 @@ class gwnet(nn.Module):
         self.skip_convs = nn.ModuleList()
         self.bn = nn.ModuleList()
         self.gconv = nn.ModuleList()
+        self.temporal_attn_layers = nn.ModuleList()
+        self.temporal_fusion_logits = nn.ParameterList()
 
         self.start_conv = nn.Conv2d(
             in_channels=in_dim, out_channels=residual_channels, kernel_size=(1, 1)
@@ -137,6 +177,16 @@ class gwnet(nn.Module):
         self.supports_len = 0
         if supports is not None:
             self.supports_len += len(supports)
+            base_adj = torch.stack([s.detach().clone() for s in supports], dim=0).mean(dim=0)
+            self.register_buffer("spatial_base_adj", base_adj)
+        else:
+            self.spatial_base_adj = None
+
+        if self.spatial_attention and self.gcn_bool:
+            self.spatial_q = nn.Conv2d(dilation_channels, dilation_channels, kernel_size=(1, 1), bias=False)
+            self.spatial_k = nn.Conv2d(dilation_channels, dilation_channels, kernel_size=(1, 1), bias=False)
+            self.spatial_beta_logit = nn.Parameter(torch.tensor(0.0))
+            self.supports_len += 1
 
         if gcn_bool and addaptadj:
             if supports is None:
@@ -198,6 +248,16 @@ class gwnet(nn.Module):
                     self.gconv.append(
                         gcn(dilation_channels, residual_channels, dropout, support_len=self.supports_len)
                     )
+                if self.temporal_attention:
+                    self.temporal_attn_layers.append(
+                        TemporalAttentionLayer(
+                            channels=dilation_channels,
+                            heads=temporal_attention_heads,
+                            attn_dropout=temporal_attention_dropout,
+                            causal=temporal_attention_causal,
+                        )
+                    )
+                    self.temporal_fusion_logits.append(nn.Parameter(torch.tensor(0.0)))
 
         self.end_conv_1 = nn.Conv2d(
             in_channels=skip_channels, out_channels=end_channels, kernel_size=(1, 1), bias=True
@@ -228,6 +288,11 @@ class gwnet(nn.Module):
             gate = torch.sigmoid(self.gate_convs[i](residual))
             x = filter_ * gate
 
+            if self.temporal_attention:
+                temporal_out = self.temporal_attn_layers[i](x)
+                alpha = torch.sigmoid(self.temporal_fusion_logits[i])
+                x = alpha * x + (1.0 - alpha) * temporal_out
+
             # Skip connection
             s = self.skip_convs[i](x)
             if not isinstance(skip, int):
@@ -236,10 +301,22 @@ class gwnet(nn.Module):
 
             # Graph convolution or fallback 1x1 conv
             if self.gcn_bool and self.supports is not None:
+                supports_used = new_supports
+                if supports_used is None:
+                    supports_used = self.supports
+                if self.spatial_attention:
+                    q = self.spatial_q(x).mean(dim=3).transpose(1, 2)  # (B, N, C)
+                    k = self.spatial_k(x).mean(dim=3).transpose(1, 2)  # (B, N, C)
+                    attn_scores = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
+                    attn_adj = F.softmax(attn_scores, dim=-1).mean(dim=0)
+                    if self.spatial_base_adj is not None:
+                        beta = torch.sigmoid(self.spatial_beta_logit)
+                        attn_adj = beta * self.spatial_base_adj + (1.0 - beta) * attn_adj
+                    supports_used = supports_used + [attn_adj]
                 if self.addaptadj:
-                    x = self.gconv[i](x, new_supports)
+                    x = self.gconv[i](x, supports_used)
                 else:
-                    x = self.gconv[i](x, self.supports)
+                    x = self.gconv[i](x, supports_used)
             else:
                 x = self.residual_convs[i](x)
 
